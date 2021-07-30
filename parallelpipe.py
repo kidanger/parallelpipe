@@ -5,8 +5,7 @@ producer - map - map2 /
          \ map /
 """
 from multiprocessing import Process, Queue
-from time import sleep
-import inspect
+from threading import Thread
 import collections
 
 class EXIT:
@@ -21,10 +20,10 @@ def iterqueue(queue, expected):
             yield item
         expected -= 1
 
-class Task(Process):
+class ThreadTask(Thread):
     """Represent one single task executing a callable in a subrocess"""
     def __init__(self, callable, args=(), kwargs={}):
-        super(Task, self).__init__()
+        super().__init__()
         self._callable = callable
         self._args = args
         self._kwargs = kwargs
@@ -57,7 +56,68 @@ class Task(Process):
         """Execute the task on all the input and send the needed number of EXIT at the end"""
         input = self._consume()
         put_item = self._que_out.put
-        
+
+        try:
+            if input is None: # producer
+                res = self._callable(*self._args, **self._kwargs)
+            else:
+                res = self._callable(input, *self._args, **self._kwargs)
+            if res != None:
+                for item in res:
+                    put_item(item)
+
+        except Exception as e:
+            # we catch an error, we send on the error que, we consume the input and we exit
+            # consuming the input queue avoid to keep running processes before exiting with
+            # errors
+            self._que_err.put((self.name, e))
+            if input is not None:
+                for i in input:
+                    pass
+            raise
+
+        finally:
+            for i in range(self._num_followers):
+                put_item(EXIT)
+            self._que_err.put(EXIT)
+
+class ProcessTask(Process):
+    """Represent one single task executing a callable in a subrocess"""
+    def __init__(self, callable, args=(), kwargs={}):
+        super().__init__()
+        self._callable = callable
+        self._args = args
+        self._kwargs = kwargs
+        self._que_in = None
+        self._que_out = None
+        self._que_err = None
+
+    def set_in(self, que_in, num_senders):
+        """Set the queue in input and the number of parallel tasks that send inputs"""
+        self._que_in = que_in
+        self._num_senders = num_senders
+
+    def set_out(self, que_out, num_followers):
+        """Set the queue in output and the number of parallel tasks that follow"""
+        self._que_out = que_out
+        self._num_followers = num_followers
+
+    def set_err(self, que_err):
+        """Set the error queue. We push here all the error we get"""
+        self._que_err = que_err
+
+    def _consume(self):
+        """Return the input iterator to be consumed or None if this is a producer job"""
+        if self._que_in:
+            return iterqueue(self._que_in, self._num_senders)
+        else:
+            return None
+
+    def run(self):
+        """Execute the task on all the input and send the needed number of EXIT at the end"""
+        input = self._consume()
+        put_item = self._que_out.put
+
         try:
             if input is None: # producer
                 res = self._callable(*self._args, **self._kwargs)
@@ -89,6 +149,7 @@ class Stage(object):
             raise TypeError("Target is not callable")
         self.qsize = 0 # output queue size
         self.workers = 1
+        self.type = 'thread'
         self._processes = None
         self._target = target
         self._args = args
@@ -101,14 +162,17 @@ class Stage(object):
         else:
             self.target_name = target.__name__
 
-    def setup(self, workers=1, qsize=0):
+    def setup(self, workers=1, qsize=0, type='thread'):
         """Setup the pool parameters like number of workers and output queue size"""
         if workers <= 0:
             raise ValueError("workers have to be greater then zero")
         if qsize < 0:
             raise ValueError("qsize have to be greater or equal zero")
+        if type not in ('process', 'thread'):
+            raise ValueError("type have to be 'process' or 'thread'")
         self.qsize = qsize # output que size
         self.workers = workers
+        self.type = type
         return self
 
     @property
@@ -117,7 +181,10 @@ class Stage(object):
         if self._processes is None:
             self._processes = []
             for p in range(self.workers):
-                t = Task(self._target, self._args, self._kwargs)
+                if self.type == 'thread':
+                    t = ThreadTask(self._target, self._args, self._kwargs)
+                else:
+                    t = ProcessTask(self._target, self._args, self._kwargs)
                 t.name = "%s-%d" % (self.target_name, p)
                 self._processes.append(t)
 
