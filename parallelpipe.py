@@ -244,12 +244,12 @@ class Stage(object):
         self._kwargs = kwargs
         return self
 
-def stage(workers=1, qsize=0):
+def stage(workers=1, qsize=0, type='thread'):
     def decorator(f):
-        return Stage(f).setup(workers=workers, qsize=qsize)
+        return Stage(f).setup(workers=workers, qsize=qsize, type=type)
     return decorator
 
-def map_stage(workers=1, qsize=0, filter_errors=False):
+def map_stage(workers=1, qsize=0, type='thread', filter_errors=False):
     def decorator(f):
         if filter_errors:
             def map_task(it, *args, **argv):
@@ -263,7 +263,7 @@ def map_stage(workers=1, qsize=0, filter_errors=False):
                 for item in it:
                     yield f(item, *args, **argv)
         map_task.__name__ = "pipe_map-%s" % f.__name__
-        return Stage(map_task).setup(workers=workers, qsize=qsize)
+        return Stage(map_task).setup(workers=workers, qsize=qsize, type=type)
     return decorator
 
 class TaskException(Exception):

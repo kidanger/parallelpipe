@@ -12,7 +12,7 @@ except Exception as e:
 
 setup(
     name='parallelpipe',
-    version='0.2.6',
+    version='0.2.7',
     author='Giuseppe Tribulato',
     author_email='gtsystem@gmail.com',
     py_modules=['parallelpipe'],
