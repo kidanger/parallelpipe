@@ -4,8 +4,10 @@
 producer - map - map2 /
          \ map /
 """
-from multiprocessing import Process, Queue
+from multiprocessing import Process
+from multiprocessing import Queue as PQueue
 from threading import Thread
+from queue import Queue
 import collections
 
 class EXIT:
@@ -94,16 +96,19 @@ class ProcessTask(Process):
 
     def set_in(self, que_in, num_senders):
         """Set the queue in input and the number of parallel tasks that send inputs"""
+        assert type(que_in) == type(PQueue())
         self._que_in = que_in
         self._num_senders = num_senders
 
     def set_out(self, que_out, num_followers):
         """Set the queue in output and the number of parallel tasks that follow"""
+        assert type(que_out) == type(PQueue())
         self._que_out = que_out
         self._num_followers = num_followers
 
     def set_err(self, que_err):
         """Set the error queue. We push here all the error we get"""
+        assert type(que_err) == type(PQueue())
         self._que_err = que_err
 
     def _consume(self):
@@ -183,8 +188,10 @@ class Stage(object):
             for p in range(self.workers):
                 if self.type == 'thread':
                     t = ThreadTask(self._target, self._args, self._kwargs)
-                else:
+                elif self.type == 'process':
                     t = ProcessTask(self._target, self._args, self._kwargs)
+                else:
+                    raise ValueError(f"type should be 'thread' or 'process', not {self.type}")
                 t.name = "%s-%d" % (self.target_name, p)
                 self._processes.append(t)
 
@@ -281,17 +288,22 @@ class Pipeline(list):
 
     def results(self):
         """Start all the tasks and return data on an iterator"""
+        def get_queue(tasks):
+            if any(t.type == 'process' for t in tasks):
+                return PQueue
+            return Queue
+
         tt = None
         for i, tf in enumerate(self[:-1]):
             tt = self[i+1]
-            q = Queue(tf.qsize)
+            q = get_queue((tt, tf))(tf.qsize)
             tf.set_out(q, tt.workers)
             tt.set_in(q, tf.workers)
 
         if tt is None: # we have only one pool
             tt = self[0]
-        q = Queue(tt.qsize)
-        err_q = Queue()
+        q = get_queue((tt,))(tt.qsize)
+        err_q = get_queue(self)()
         tt.set_out(q, 1)
 
         for t in self:
